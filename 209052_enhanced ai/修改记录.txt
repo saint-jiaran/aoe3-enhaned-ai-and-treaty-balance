@@ -1,0 +1,313 @@
+Enhanced AI 模组修改记录
+================================================================================
+修改日期：2026-09-13
+修改对象：C:\Users\11022\Games\Age of Empires 3 DE\76561198953220667\mods\local\209052_enhanced ai
+
+--------------------------------------------------------------------------------
+一、卡牌发送逻辑（game\ai\core\aihccards.xs）
+--------------------------------------------------------------------------------
+修改内容：
+    将发卡逻辑改为「只有在所有一次性/有限卡片全部发完后，才发送无限卡片」。
+
+实现位置：
+    aiHCCards 卡牌选择逻辑中，引入 isInfiniteCard() 判断：
+    - 主循环只考虑一次性（有限）卡片：if (isInfiniteCard(deck, i) == false)
+    - 无限卡片被单独追踪为 bestInfiniteCard / bestInfiniteCardValue
+    - 当没有一次性卡片可发时，才回退选择最好的无限卡片
+      （bestCard = bestInfiniteCard）
+
+    相关代码区域：aihccards.xs 约 2943~3930 行附近。
+
+    补充修复（无限卡仍可能提前发送的问题）：
+       原实现只在「当前可发送的一次性卡」里判断 foundFiniteCard，导致那些
+       时代门控（age 未到）的一次性卡被跳过，从而在一次性卡尚未发完时
+       提前发送了无限卡。现新增 hasRemainingFiniteCard() 辅助函数，在回退到
+       无限卡之前，先检查卡组中是否仍存在「未发送的一次性卡」（发送次数 > 0）：
+       - 存在 → 继续等待，不发送无限卡（bestCard 保持 -1）
+       - 不存在 → 才回退到 bestInfiniteCard
+       （USA / 墨西哥额外检查 aiHCGetExtendedDeck() 扩展卡组）
+
+--------------------------------------------------------------------------------
+二、帝王时代原住民升级科技（game\ai\core\aimiscnew.xs）
+--------------------------------------------------------------------------------
+修改内容：
+    将「传说原住民」（+50% 原住民血量/攻击，1500 食物 + 1500 木材）科技，
+    加入各文明的帝王时代研究队列，直接研究。
+
+    （非洲文明 DEImpLegendaryNativesAfrican 为 Shadow 自动触发，无需手动研究）
+
+按文明分别加入以下监控规则：
+
+    1) capitolUpgradeMonitor（欧洲文明，约 1239 行起）
+       科技：ImpLegendaryNatives
+       研究建筑：Capitol（cUnitTypeCapitol）
+
+    2) nativeCapitolUpgradeMonitor（原住民文明，约 1285 行起）
+       科技：ImpLegendaryNativesNatives
+       研究建筑：TownCenter（cUnitTypeTownCenter）
+
+    3) asianCapitolUpgradeMonitor（亚洲文明，约 1325 行起）
+       科技：ypImpLegendaryNatives2
+       研究建筑：TownCenter（cUnitTypeTownCenter）
+
+    每个监控的完成判断（xsDisableSelf）也相应扩展为「新科技 cTechStatusActive
+    后」才关闭自身。
+
+--------------------------------------------------------------------------------
+三、农民数量上限（game\ai\core\aicore.xs + game\ai\core\aisetup.xs）
+--------------------------------------------------------------------------------
+修改内容：去掉 AI 农民数量的 80 上限，改为出到游戏上限（99）。
+
+    1) aicore.xs - updateSettlerCounts()（约 176~178 行）
+       硬上限由 80 改为 99：
+           原：if (wantedSettlersThisAge > 80) { wantedSettlersThisAge = 80; }
+           新：if (wantedSettlersThisAge > 99) { wantedSettlersThisAge = 99; }
+
+    2) aisetup.xs - initArrays() 各难度目标值
+       困难（非 SPC）第 3~5 时代：80 → 99
+       最难 / 极限 第 3~5 时代：80 → 99
+
+    3) aisetup.xs - initArrays() 荷兰文明块
+       第 3~5 时代目标：50 → 70
+
+    保留未动：
+       - 法国 80（Coureur des Bois 游戏建造上限为 80）
+       - 其他文明的游戏真实上限（initEcon 中 kbGetBuildLimit 会再钳制一次）
+
+--------------------------------------------------------------------------------
+四、关于 techtreey.xml（未生效，已还原）
+--------------------------------------------------------------------------------
+说明：
+    曾尝试在 mymode\data\techtreey.xml 的 Age0Dutch 科技中，
+    将荷兰 Settler 建造上限 50 改为 70。
+
+    后经确认不需要修改此处：荷兰农民上限会由游戏内其他科技（卡片）提升，
+    故该文件已还原为原状，保持不变。
+
+--------------------------------------------------------------------------------
+五、新增科技研究与战犬单位（aitechs.xs / aimiscnew.xs / aicore.xs）
+--------------------------------------------------------------------------------
+修改内容：
+    为文明加入以下自定义科技的自动研究，并确保西班牙研究其专属帝王科技、
+    建造战犬（WarDog）单位。
+
+    1) 军械库科技（game\ai\core\aitechs.xs - arsenalUpgradeMonitor）
+       科技：DESPCHorseBreeding（骑兵移动速度）
+             CavalryRifling（骑兵伤害）
+       研究建筑：军械库（researchBuildingPUID，按文明自动适配）
+       触发条件：拥有 6 个以上骑兵（重骑 + 轻骑）时研究。
+
+    2) 畜栏科技（game\ai\core\aimiscnew.xs - 新增规则 livestockUpgradeMonitor）
+       科技：DEFullingMills（绵羊/奶牛上限、畜类产出）
+       研究建筑：畜栏（gLivestockPenUnit，按文明自动适配）
+       启用位置：aicore.xs age3Monitor 中与 livestockMonitor 一起启用。
+
+    3) 战犬单位（无需新增代码）
+       warDogManager 规则（aimiscnew.xs）此前已存在，并在 aicore.xs 中
+       已为西班牙（cCivSpanish）启用，会自动维持战犬数量至建造上限。
+
+    4) 西班牙帝王科技（game\ai\core\aimiscnew.xs - capitolUpgradeMonitor）
+       西班牙（cCivSpanish）改为研究其专属帝王科技：
+           ImpKnighthoodSpain（代替通用 ImpKnighthood）
+           ImpPeerageSpain（代替通用 ImpPeerage）
+       其余文明仍研究通用 ImpKnighthood / ImpPeerage。
+       完成判断（xsDisableSelf）亦同步改用对应科技判定。
+
+--------------------------------------------------------------------------------
+六、战犬单位扩展到所有欧洲文明（aicore.xs / aimiscnew.xs）
+--------------------------------------------------------------------------------
+修改内容：
+    将战犬（WarDog）维护规则 warDogManager 的启用范围，从「仅西班牙」，
+    扩展为「所有欧洲文明」。
+
+    1) aicore.xs（age3Monitor 初始化块）
+       原：仅在 cMyCiv == cCivSpanish 时启用 warDogManager。
+       新：warDogManager 从西班牙专属块移出，改为
+           if (civIsEuropean() == true) 启用。
+       （missionaryManager / addMissionariesToAttackPlan 仍仅限西班牙）
+
+    2) aimiscnew.xs（warDogManager）
+       规则注释由「Spanish」改为「European civs」。
+       规则逻辑本身无需改动：内部按 kbGetBuildLimit(WarDog) 判断，
+       对未启用战犬的文明会自动跳过（limit < 1 时直接 return）。
+
+    说明：战犬是否可用由游戏数据决定；只要某文明启用了 WarDog
+    （建造上限 > 0），该规则就会自动将其维持至上限。
+
+--------------------------------------------------------------------------------
+七、非洲文明 deField 建造修复（game\ai\core\aibuildings.xs）
+--------------------------------------------------------------------------------
+修改内容：修复非洲文明（豪萨 / 埃塞俄比亚）AI 不建造 deField 的问题。
+
+    背景：非洲文明的农田与种植园都是 deField，其选址依赖谷仓（deGranary）：
+    selectFieldBuildPlanPosition() 会在主基地 200 米内寻找谷仓，找不到就把
+    农田计划挂起（return false），等谷仓建好后再放。一旦谷仓迟迟未建成，
+    农田计划就会一直排队，导致非洲 AI 长期不建农田。
+
+    1) 修复 selectGranaryBuildPlanPosition() 的作用域 bug
+       huntableUnitID 原本声明在 if 块内部，却在块外（函数末尾）被引用，
+       会读到未定义变量。现将 int huntableUnitID = -1; 提升到函数作用域，
+       保证谷仓缓冲间距（靠猎物 5.0 / 农田 15.0）判断正确。
+
+    2) selectFieldBuildPlanPosition() 增加基地兜底选址
+       当 200 米内找不到可用谷仓时，除尝试补建一座谷仓外，不再返回 false
+       让农田计划无限排队，而是直接把农田放到主基地（aiPlanSetBaseID）并
+       返回 true。这样非洲文明的 deField 一定能被建造出来，不再卡在谷仓后。
+
+--------------------------------------------------------------------------------
+八、所有国家牲畜造满（game\ai\core\aieconomynew.xs - livestockMonitor）
+--------------------------------------------------------------------------------
+修改内容：在 livestockMonitor 中新增山羊、水牛、非洲牛的维持计划，使各国
+    把牲畜维持到建造上限。
+
+    1) 山羊（亚洲：中国、印度、日本卡牌；非洲：豪萨/埃塞俄比亚）
+       新增 ypGoat 维持计划（cUnitTypeypGoat），上限取
+       kbGetBuildLimit(cMyID, cUnitTypeypGoat)（与绵羊共享 AbstractCaprine
+       上限）。
+       非洲文明的山羊由结盟科技解锁（豪萨 DEAllegianceFulani、埃塞俄比亚
+       DEAllegianceOromo），该科技仅 Enable ypGoat 而未单独设上限；结盟前
+       该共享上限可能读到 0，故对非洲文明强制山羊上限至少为 30
+       （AbstractCaprine 基础值），确保山羊维持计划在结盟前就已就绪、
+       结盟后即可自动造满。
+
+    2) 水牛（日本：牲畜栏卡牌）
+       新增 ypWaterBuffalo 维持计划（cUnitTypeypWaterBuffalo），上限取
+       kbGetBuildLimit(cMyID, cUnitTypeypWaterBuffalo)（与 Cow 共享
+       AbstractBovine 上限）。
+
+    3) 非洲牛（豪萨：Sanga，埃塞俄比亚：Zebu）
+       新增 deSangaCattle（cUnitTypedeSangaCattle）与 deZebuCattle
+       （cUnitTypedeZebuCattle）维持计划，上限取各自 kbGetBuildLimit
+       （与 Cow 共享 AbstractBovine 上限 20）。
+
+    4) 圣牛（印度，game\ai\core\aieconomy.xs - sacredFieldMonitor）
+       原 sacredFieldMonitor 只把圣牛 ypSacredCow 维持到总数 10，现将
+       numCows = 10 - numHerdables 改为 20 - numHerdables，即把圣牛（连同
+       捕获的畜群）维持到建造上限 20。
+
+    说明：
+       - deAutoSangaCattle / deAutoZebuCattle 是 NotPlayerPlaceable 的自动
+         牛，由牲畜市场（LogicalTypeCanSpawnCattle）自动产出，AI 无法直接
+         训练，故维持计划针对可训练的基础牛 deSangaCattle / deZebuCattle。
+       - 牲畜市场（deLivestockMarket）本身已由 livestockMonitor 负责建造；
+         非洲的牲畜市场需要先有 2 座 deField 才触发，配合第七节修复后即可
+         正常运转。
+
+--------------------------------------------------------------------------------
+九、原住民祭祀造满（game\ai\core\aicore.xs - danceMonitor 跳舞系统）
+--------------------------------------------------------------------------------
+修改内容：让原住民文明通过跳舞把祭祀（Medicine Man）维持到建造上限。
+
+    1) 易洛魁（Iroquois）
+       跳舞策略列表加入 cTacticHolyDance，并在 danceMonitor 的战术评分
+       switch 中新增 cTacticHolyDance 分支：当 xpMedicineMan 数量低于上限时
+       给予高优先级（96，连续跳舞 30~90 秒时 99），从而持续召唤祭祀。
+
+    2) 苏族（Sioux）
+       跳舞策略列表加入 cTacticHolyDanceLakota，并新增对应 switch 分支，
+       当 xpMedicineMan 数量低于上限时优先跳 HolyDanceLakota 召唤祭祀。
+
+    3) 阿兹特克（Aztec）
+       原本已通过 cTacticHolyDanceAztec 召唤 xpMedicineManAztec，无需改动。
+
+    说明：祭祀上限由 kbGetBuildLimit 读取，数量达到上限后优先级自然回落。
+
+--------------------------------------------------------------------------------
+十、非洲 deField 数量上限 10→50（game\ai\core\aieconomynew.xs）
+--------------------------------------------------------------------------------
+修改内容：非洲文明的 deField 既是农田又是种植园，但原 AI 只把它当普通农田/种植园
+各建几座（millManager 目标 5 + plantationManager 目标 3，再叠加 cMaxSettlersPerFarm
+=10 的需求驱动），实际通常停在 10 座左右。现将非洲的 deField 建造目标提高到 50。
+
+    1) millManager
+       原本 const int cWantedMills = 5；现对非洲文明改为读取 deField 建造上限：
+           cWantedMills = kbGetBuildLimit(cMyID, cUnitTypedeField);
+           若小于 50 则强制补到 50。
+       （deField 在 protoy 里本就 <buildlimit>50</buildlimit>，故无需改游戏数据，
+         纯靠 AI 建满 50 座。）
+
+    2) plantationManager
+       原本 const int cWantedPlantations = 3；现对非洲文明改为 0，避免与
+       millManager 的 deField 目标重复计数（deField 已同时覆盖种植园）。
+
+    说明：
+       - 农田选址（aibuildings.xs 的 selectFieldBuildPlanPosition）每座谷仓
+         （deGranary）10 米内最多放 8 块 deField，放满后会自动补建下一座谷仓
+         并继续铺田，因此能一路铺到 50 座（约 6~7 座谷仓）。
+       - deField 每座 gathererlimit 3，50 座即最多 150 农民从事田/种植园，
+         上限高于农民总数，故实际铺多少由需求与人口共同决定。
+
+--------------------------------------------------------------------------------
+十一、豪萨 deUniversity / 埃塞 deMountainMonastery / 印加 Plantation 造满
+--------------------------------------------------------------------------------
+修改内容：把三个建筑的建造数量提到各自上限。
+
+    1) 豪萨 deUniversity（game\ai\core\aibuildings.xs - buildingMonitor）
+       protoy 里 deUniversity(1851) 的 <buildlimit>4</buildlimit>。原代码只建 1 座
+       （kbUnitCount < 1），现改为 kbUnitCount < kbGetBuildLimit(...)（即 4 座）。
+       - 第 1 座仍放在 TC 与王宫中点（吃 influence 加成）；
+       - 第 2~4 座用 createSimpleBuildPlan 就近基地常规选址。
+
+    2) 埃塞 deMountainMonastery（game\ai\core\aibuildings.xs - buildingMonitor）
+       protoy 里 deMountainMonastery(1846) 的 <buildlimit>2</buildlimit>。原代码按
+       主基地附近矿场数量建（每矿 1 座，上限 2、下限 1），即通常只 1~2 座；
+       现直接改为建满 kbGetBuildLimit（2 座），以拉满被动金币/influence 产出。
+       - 选址仍走 selectMountainMonasteryBuildPlanPosition：优先贴矿，第 2 座
+         没矿可贴时回退到基地内。
+
+    3) 印加 Plantation（game\ai\core\aieconomynew.xs - plantationManager）
+       Plantation(417) 在 protoy 里没有 <buildlimit>（无硬上限）。原 plantationManager
+       对所有文明固定 cWantedPlantations = 3，是印加种植园数量的实际瓶颈。
+       现对印加（cCivDEInca）单独把目标提高到 20。
+       - 说明：种植园每座 gathererlimit 10、600 木；20 座足以覆盖 99 农民全采金币，
+         是"造满"的合理上限。若想改别的数字（如 10 或 50）可直接调这里的 20。
+
+--------------------------------------------------------------------------------
+十二、修复无限卡在一次性卡发完后不再发送的问题（game\ai\core\aihccards.xs）
+--------------------------------------------------------------------------------
+问题：第一节加的判断函数 hasRemainingFiniteCard 用了 aiHCCardsGetCardCount(card) > 0
+来判定"还有一次性卡未发"，但 aiHCCardsGetCardCount 返回的是该卡在卡片池里的
+静态可发送次数（一次性卡恒 > 0，发完也不会变成 0），于是这个函数永远返回 true，
+导致一次性卡全部发完后无限卡也被永久挡住、一张都不发。
+
+修改：
+    1) hasRemainingFiniteCard 改用 aiHCDeckCanPlayCard(i, extended) 来判断
+       "这张一次性卡现在还能不能发"（= 未发送 且 已达到所需时代），并跳过无限卡
+       （用 isInfiniteCard 识别）。函数签名加了一个 extended 参数，用于区分
+       默认卡组 / 美国、墨西哥的扩展卡组。
+    2) 调用处同步传入 extended（默认卡组 false、扩展卡组 true）。
+
+说明：
+    - 修复后行为：只要还有"当前可发的一次性卡"就优先发一次性卡；一次性卡全部
+      发完后回退到发送最优的无限卡。
+    - 时代未到的后续一次性卡（比如帝国时代才解锁的卡）不会再阻塞当前时代的
+      无限卡；等升到对应时代后那张一次性卡会重新进入可发池、自动抢占优先级。
+
+--------------------------------------------------------------------------------
+十三、亚洲三国研究 DEHCTeaExport2 科技（game\ai\core\aimiscnew.xs）
+--------------------------------------------------------------------------------
+修改内容：让亚洲三国（中国 / 日本 / 印度）AI 在帝王时代后研究 DEHCTeaExport2
+    （茶叶出口 2）科技。
+
+    科技说明（mymode\data\techtreey.xml，dbid 8515）：
+      - 成本：1000 食物 + 1000 金币，40 研究点
+      - 前置：Industrialize；由 ypPostImperialChinese / ypPostImperialJapanese /
+        ypPostImperialIndian 三个 Shadow 科技在帝王时代后激活（三国各一个）
+      - 效果：领事馆单位训练速度 +50%（AbstractConsulateUnit TrainPoints 0.50）、
+        ypConsulate 建造上限 +1、并让领事馆获得 Oldenburg 自动采金（Trade 速率 +0.20）
+
+    研究建筑：TownCenter（cUnitTypeTownCenter，与 ypImpLegendaryNatives2 同建筑，
+      同批由 ypPostImperial* 激活，见 protoy.xml unit id=294）。
+
+    实现位置：asianCapitolUpgradeMonitor（aimiscnew.xs 约 1351 行起）
+      1) 完成判断（xsDisableSelf）的条件里加入
+         kbTechGetStatus(cTechDEHCTeaExport2) == cTechStatusActive，
+         确保三国把该科技也研究完后规则才停止。
+      2) 研究调用区新增一条：
+         researchSimpleTechByCondition(cTechDEHCTeaExport2,
+            []() -> bool { return (kbTechGetStatus(cTechDEHCTeaExport2) == cTechStatusObtainable); },
+            cUnitTypeTownCenter, myTownCenterId, 40);
+
+    说明：cTechDEHCTeaExport2 常量由引擎按科技名自动绑定，无需额外声明；
+      科技在帝王时代前状态为 UNOBTAINABLE，researchSimpleTechByCondition 会自动
+      跳过，直到 ypPostImperial* 将其置为 obtainable 后才会创建研究计划。
